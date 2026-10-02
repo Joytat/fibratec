@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Prueba HLS canal 213</title>
+</head>
+<body style="background:#111;color:white;font:16px Arial">
+  <h2>Prueba HLS normalizado</h2>
+  <video id="video" controls autoplay muted playsinline style="width:80%;max-width:900px"></video>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+  <script>
+    const video = document.getElementById('video');
+    const source = '/iptv213-hls-test/stream.m3u8';
+
+    if (Hls.isSupported()) {
+      const player = new Hls();
+      player.on(Hls.Events.ERROR, (_, data) => {
+        console.error('TEST HLS', data.type, data.details, data.fatal, data.response?.code);
+      });
+      player.loadSource(source);
+      player.attachMedia(video);
+    } else {
+      video.src = source;
+    }
+  </script>
+</body>
+</html>
