@@ -18,6 +18,67 @@ class XuiController extends Controller
         $this->xuiServer = rtrim(env('XUI_SERVER', 'http://30.255.255.13'), '/');
     }
 
+    private function normalizeChannelSourceLabel(array $channel): string
+    {
+        $candidates = [
+            $channel['stream_type'] ?? null,
+            $channel['source_type'] ?? null,
+            $channel['type'] ?? null,
+            $channel['container'] ?? null,
+            $channel['source'] ?? null,
+            $channel['category_name'] ?? null,
+            $channel['name'] ?? null,
+            $channel['channel_name'] ?? null,
+        ];
+
+        $source = '';
+
+        foreach ($candidates as $candidate) {
+            if (is_scalar($candidate)) {
+                $value = trim((string) $candidate);
+                if ($value !== '') {
+                    $source .= ' ' . $value;
+                }
+            }
+        }
+
+        return strtolower($source);
+    }
+
+    private function isNonPlayableChannel(array $channel): bool
+    {
+        if (!is_array($channel)) {
+            return true;
+        }
+
+        $sourceText = $this->normalizeChannelSourceLabel($channel);
+
+        $blockedTokens = [
+            'astra',
+            'satellite',
+            'parabolic',
+            'parabólica',
+            'dvb',
+            'dvb-s',
+            'dvb_s',
+            'sat',
+            'satelite',
+            'satelital',
+            'satelite',
+            'tuner',
+            'external',
+            'antena',
+        ];
+
+        foreach ($blockedTokens as $token) {
+            if (str_contains($sourceText, $token)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Intento de login: consulta user_info en la API XUI/Xtream.
      */
@@ -131,9 +192,23 @@ class XuiController extends Controller
                 ], 502);
             }
 
+            $channels = $response->json();
+
+            if (!is_array($channels)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'XUI no devolvió una lista válida de canales.',
+                ], 502);
+            }
+
+            $playableChannels = array_values(array_filter($channels, function ($channel) {
+                return is_array($channel) && !$this->isNonPlayableChannel($channel);
+            }));
+
             return response()->json([
                 'success' => true,
-                'channels' => $response->json(),
+                'channels' => $playableChannels,
+                'count' => count($playableChannels),
             ]);
         } catch (\Throwable $e) {
             Log::error('XUI liveStreams error: ' . $e->getMessage());
@@ -222,6 +297,15 @@ class XuiController extends Controller
                     'message' => 'No se encontró el canal en XUI.',
                     'stream_id' => $streamIdRaw,
                 ], 404);
+            }
+
+            if ($this->isNonPlayableChannel($channel)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Este canal no es compatible con el player HTTP actual. Requiere origen Astra/Parabólica o DVB.',
+                    'source_type' => strtolower((string) ($channel['stream_type'] ?? $channel['source_type'] ?? $channel['type'] ?? 'unknown')),
+                    'channel' => $channel['name'] ?? null,
+                ], 400);
             }
 
             $possibleKeys = [
@@ -331,6 +415,64 @@ class XuiController extends Controller
                     'success' => false,
                     'message' => 'La sesión IPTV ya no es válida. Vuelve a iniciar sesión.',
                 ], 401);
+            }
+
+            $response = Http::timeout(20)->get($this->xuiServer . '/player_api.php', [
+                'username' => $username,
+                'password' => $password,
+                'action' => 'get_live_streams',
+            ]);
+
+            if (!$response->successful()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No se pudieron consultar los canales del servidor.',
+                ], 502);
+            }
+
+            $channels = $response->json();
+            $channel = null;
+
+            if (is_array($channels)) {
+                $channel = collect($channels)->first(function ($item) use ($streamId) {
+                    if (!is_array($item)) {
+                        return false;
+                    }
+
+                    $values = [
+                        $item['stream_id'] ?? null,
+                        $item['id'] ?? null,
+                        $item['num'] ?? null,
+                    ];
+
+                    foreach ($values as $value) {
+                        if ($value === null) {
+                            continue;
+                        }
+
+                        if ((is_numeric($value) && (int) $value === $streamId) || (string) $value === (string) $streamId) {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                });
+            }
+
+            if (!$channel) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No se encontró el canal solicitado.',
+                ], 404);
+            }
+
+            if ($this->isNonPlayableChannel($channel)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Este canal no es compatible con el player HTTP actual. Requiere origen Astra/Parabólica o DVB.',
+                    'source_type' => strtolower((string) ($channel['stream_type'] ?? $channel['source_type'] ?? $channel['type'] ?? 'unknown')),
+                    'channel' => $channel['name'] ?? null,
+                ], 400);
             }
 
             $ffmpeg = env('FFMPEG_BINARY') ?: base_path(
