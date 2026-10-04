@@ -31,3 +31,8 @@ Route::get('/compat-stream/{token}/{file}', [XuiController::class, 'compatibleSt
 // Proxy GET para evitar CORS en m3u8 / ts / otros recursos remotos.
 // Uso: /proxy?url={url_remota}
 Route::get('/proxy', [XuiController::class, 'proxy']);
+
+use App\Http\Controllers\XuiController;
+
+Route::post('/live-streams', [XuiController::class, 'liveStreams'])
+    ->withoutMiddleware([\App\Http\Middleware\VerifyCsrfToken::class]);
